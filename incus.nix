@@ -111,12 +111,119 @@ in
           };
         });
       };
+      images = mkOption {
+        description = "Incus images";
+        default = {};
+        type = types.attrsOf (types.submodule {
+          options = {
+            project = mkOption {
+              description = "Name of the associated project";
+              default = null;
+              type = types.nullOr types.str;
+            };
+            fileSource = mkOption {
+              description = "File source of the image";
+              type = types.nullOr (types.submodule {
+                options = {
+                  dataPath = mkOption {
+                    description = "Path to the rootfs tarball of the image";
+                    type = types.str;
+                  };
+                  metadataPath = mkOption {
+                    description = "Path to the metadata tarball of the image";
+                    type = types.str;
+                  };
+                };
+              });
+              default = null;
+            };
+            imageSource = mkOption {
+              description = "Image source of the image";
+              type = types.nullOr (types.submodule {
+                options = {
+                  remote = mkOption {
+                    description = "Remote of the image";
+                    type = types.str;
+                  };
+                  name = mkOption {
+                    description = "Name of the image";
+                    type = types.str;
+                  };
+                  type = mkOption {
+                    description = "Type of the image";
+                    type = types.str;
+                  };
+                };
+              });
+              default = null;
+            };
+          };
+        });
+      };
+      remotes = mkOption {
+        description = "Incus remotes";
+        type = types.attrsOf (types.submodule {
+          options = {
+            address = mkOption {
+              description = "Address of the remote";
+              type = types.str;
+            };
+            protocol = mkOption {
+              description = "Protocol of the remote";
+              type = types.nullOr types.str;
+              default = null;
+            };
+          };
+        });
+        default = {};
+      };
     };
     config = let
       boolToString = value:
         if value
         then "true"
         else "false";
+      buildRemoteBlock = remote_name: remote: ''
+        remote {
+          name = "${remote_name}"
+          address = "${remote.address}"
+          ${if remote.protocol != null then "protocol = \"${remote.protocol}\"" else null}
+        }
+      '';
+      buildFileSourceBlock = fileSource: ''
+        source_file = {
+          data_path = "${fileSource.dataPath}"
+          metadata_path = "${fileSource.metadataPath}"
+        }
+      '';
+      buildImageSourceBlock = imageSource: ''
+        source_image = {
+          remote = "${imageSource.remote}"
+          name = "${imageSource.name}"
+          type = "${imageSource.type}"
+        }
+      '';
+      buildImageBlock = image_name: image: ''
+        resource "incus_image" "${image_name}" {
+          alias {
+            name = "${image_name}"
+          }
+
+          ${
+          if image.project != null
+          then "project = \"${image.project}\""
+          else ""
+        }
+
+          ${
+          if image.fileSource != null
+          then buildFileSourceBlock image.fileSource
+          else if image.imageSource != null
+          then buildImageSourceBlock image.imageSource
+          else throw "Either image source or file source has to be specified"
+        }
+        }
+      '';
       buildNetworkBlock = network_name: network: ''
         resource "incus_network" "${network_name}" {
           name = "${network_name}"
@@ -202,13 +309,17 @@ in
           }
         }
 
-        provider "incus" {}
+        provider "incus" {
+          ${concatStringsSep "\n\n" (mapAttrsToList (name: value: buildRemoteBlock name value) cfg.remotes)}
+        }
 
         ${concatStringsSep "\n\n" (mapAttrsToList (name: value: buildProjectBlock name value) cfg.projects)}
 
         ${concatStringsSep "\n\n" (mapAttrsToList (name: value: buildNetworkBlock name value) cfg.networks)}
 
         ${concatStringsSep "\n\n" (mapAttrsToList (name: value: buildInstanceBlock name value) cfg.instances)}
+
+        ${concatStringsSep "\n\n" (mapAttrsToList (name: value: buildImageBlock name value) cfg.images)}
       '';
       applicationScriptText = ''
         STATE_DIR=/var/lib/incus-resources
@@ -227,6 +338,7 @@ in
       systemd.services.incus-setup-resources = mkIf cfg.enable {
         wantedBy = ["default.target"];
         after = ["multi-user.target"];
+        path = with pkgs; [skopeo];
         description = "Incus resource synchronization service";
         serviceConfig = {
           Type = "oneshot";
