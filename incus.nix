@@ -177,17 +177,52 @@ in
         });
         default = {};
       };
+      clusterGroups = mkOption {
+        description = "Incus cluster groups";
+        type = types.attrsOf (types.submodule {
+          options = {
+            description = mkOption {
+              description = "Description of the group";
+              default = null;
+              type = types.nullOr types.str;
+            };
+            members = mkOption {
+              description = "Members of the group";
+              default = [];
+              type = types.listOf types.str;
+            };
+          };
+        });
+        default = {};
+      };
     };
     config = let
       boolToString = value:
         if value
         then "true"
         else "false";
+      buildClusterGroup = group_name: group: ''
+        resource "incus_cluster_group" "${group_name}" {
+          name = "${group_name}"
+
+          ${
+          if group.description != null
+          then "description = \"${group.description}\""
+          else ""
+        }
+
+        members = [${concatStringsSep ", " (map (g: "\"${g}\"") group.members)}]
+        }
+      '';
       buildRemoteBlock = remote_name: remote: ''
         remote {
           name = "${remote_name}"
           address = "${remote.address}"
-          ${if remote.protocol != null then "protocol = \"${remote.protocol}\"" else null}
+          ${
+          if remote.protocol != null
+          then "protocol = \"${remote.protocol}\""
+          else null
+        }
         }
       '';
       buildFileSourceBlock = fileSource: ''
@@ -312,6 +347,8 @@ in
         provider "incus" {
           ${concatStringsSep "\n\n" (mapAttrsToList (name: value: buildRemoteBlock name value) cfg.remotes)}
         }
+
+        ${concatStringsSep "\n\n" (mapAttrsToList (name: value: buildClusterGroup name value) cfg.clusterGroups)}
 
         ${concatStringsSep "\n\n" (mapAttrsToList (name: value: buildProjectBlock name value) cfg.projects)}
 
